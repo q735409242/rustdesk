@@ -3,10 +3,10 @@ import 'dart:async';
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
-import 'package:flutter_improved_scrolling/flutter_improved_scrolling.dart';
 import 'package:flutter_hbb/models/state_model.dart';
 
 import '../../consts.dart';
@@ -73,7 +73,10 @@ class RemotePage extends StatefulWidget {
 }
 
 class _RemotePageState extends State<RemotePage>
-    with AutomaticKeepAliveClientMixin, MultiWindowListener {
+    with
+        AutomaticKeepAliveClientMixin,
+        MultiWindowListener,
+        TickerProviderStateMixin {
   Timer? _timer;
   String keyboardMode = "legacy";
   bool _isWindowBlur = false;
@@ -113,9 +116,13 @@ class _RemotePageState extends State<RemotePage>
     _ffi = FFI(widget.sessionId);
     Get.put<FFI>(_ffi, tag: widget.id);
     _ffi.imageModel.addCallbackOnFirstImage((String peerId) {
+      _ffi.canvasModel.activateLocalCursor();
       showKBLayoutTypeChooserIfNeeded(
           _ffi.ffiModel.pi.platform, _ffi.dialogManager);
+      _ffi.recordingModel
+          .updateStatus(bind.sessionGetIsRecording(sessionId: _ffi.sessionId));
     });
+    _ffi.canvasModel.initializeEdgeScrollFallback(this);
     _ffi.start(
       widget.id,
       password: widget.password,
@@ -245,13 +252,14 @@ class _RemotePageState extends State<RemotePage>
     super.dispose();
     debugPrint("REMOTE PAGE dispose session $sessionId ${widget.id}");
     _ffi.textureModel.onRemotePageDispose(closeSession);
-    // ensure we leave this session, this is a double check
-    _ffi.inputModel.enterOrLeave(false);
+    if (closeSession) {
+      // ensure we leave this session, this is a double check
+      _ffi.inputModel.enterOrLeave(false);
+    }
     DesktopMultiWindow.removeListener(this);
     _ffi.dialogManager.hideMobileActionsOverlay();
     _ffi.imageModel.disposeImage();
     _ffi.cursorModel.disposeImages();
-    _ffi.recordingModel.onClose();
     _rawKeyFocusNode.dispose();
     await _ffi.close(closeSession: closeSession);
     _timer?.cancel();
@@ -393,7 +401,7 @@ class _RemotePageState extends State<RemotePage>
     super.build(context);
     return WillPopScope(
         onWillPop: () async {
-          clientClose(sessionId, _ffi.dialogManager);
+          clientClose(sessionId, _ffi);
           return false;
         },
         child: MultiProvider(providers: [
@@ -406,6 +414,8 @@ class _RemotePageState extends State<RemotePage>
   }
 
   void enterView(PointerEnterEvent evt) {
+    _ffi.canvasModel.rearmEdgeScroll();
+
     _cursorOverImage.value = true;
     _firstEnterImage.value = true;
     if (_onEnterOrLeaveImage4Toolbar != null) {
@@ -425,6 +435,8 @@ class _RemotePageState extends State<RemotePage>
   }
 
   void leaveView(PointerExitEvent evt) {
+    _ffi.canvasModel.disableEdgeScroll();
+
     if (_ffi.ffiModel.keyboard) {
       _ffi.inputModel.tryMoveEdgeOnExit(evt.position);
     }
@@ -623,7 +635,7 @@ class _ImagePaintState extends State<ImagePaint> {
               onHover: (evt) {},
               child: child);
         });
-    if (c.imageOverflow.isTrue && c.scrollStyle == ScrollStyle.scrollbar) {
+    if (c.imageOverflow.isTrue && c.scrollStyle != ScrollStyle.scrollauto) {
       final paintWidth = c.getDisplayWidth() * s;
       final paintHeight = c.getDisplayHeight() * s;
       final paintSize = Size(paintWidth, paintHeight);
@@ -739,12 +751,6 @@ class _ImagePaintState extends State<ImagePaint> {
     ScrollController horizontal,
     ScrollController vertical,
   ) {
-    final scrollConfig = CustomMouseWheelScrollConfig(
-        scrollDuration: kDefaultScrollDuration,
-        scrollCurve: Curves.linearToEaseOut,
-        mouseWheelTurnsThrottleTimeMs:
-            kDefaultMouseWheelThrottleDuration.inMilliseconds,
-        scrollAmountMultiplier: kDefaultScrollAmountMultiplier);
     var widget = child;
     if (layoutSize.width < size.width) {
       widget = ScrollConfiguration(
@@ -790,36 +796,26 @@ class _ImagePaintState extends State<ImagePaint> {
       );
     }
     if (layoutSize.width < size.width) {
-      widget = ImprovedScrolling(
-        scrollController: horizontal,
-        enableCustomMouseWheelScrolling: cursorOverImage.isFalse,
-        customMouseWheelScrollConfig: scrollConfig,
-        child: RawScrollbar(
-          thickness: kScrollbarThickness,
-          thumbColor: Colors.grey,
-          controller: horizontal,
-          thumbVisibility: false,
-          trackVisibility: false,
-          notificationPredicate: layoutSize.height < size.height
-              ? (notification) => notification.depth == 1
-              : defaultScrollNotificationPredicate,
-          child: widget,
-        ),
+      widget = RawScrollbar(
+        thickness: kScrollbarThickness,
+        thumbColor: Colors.grey,
+        controller: horizontal,
+        thumbVisibility: false,
+        trackVisibility: false,
+        notificationPredicate: layoutSize.height < size.height
+            ? (notification) => notification.depth == 1
+            : defaultScrollNotificationPredicate,
+        child: widget,
       );
     }
     if (layoutSize.height < size.height) {
-      widget = ImprovedScrolling(
-        scrollController: vertical,
-        enableCustomMouseWheelScrolling: cursorOverImage.isFalse,
-        customMouseWheelScrollConfig: scrollConfig,
-        child: RawScrollbar(
-          thickness: kScrollbarThickness,
-          thumbColor: Colors.grey,
-          controller: vertical,
-          thumbVisibility: false,
-          trackVisibility: false,
-          child: widget,
-        ),
+      widget = RawScrollbar(
+        thickness: kScrollbarThickness,
+        thumbColor: Colors.grey,
+        controller: vertical,
+        thumbVisibility: false,
+        trackVisibility: false,
+        child: widget,
       );
     }
 

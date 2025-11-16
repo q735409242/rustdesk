@@ -133,12 +133,13 @@ pub fn set_last_changed_resolution(display_name: &str, original: (i32, i32), cha
 
 #[inline]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub fn reset_resolutions() {
+pub fn restore_resolutions() {
     for (name, res) in CHANGED_RESOLUTIONS.read().unwrap().iter() {
         let (w, h) = res.original;
+        log::info!("Restore resolution of display '{}' to ({}, {})", name, w, h);
         if let Err(e) = crate::platform::change_resolution(name, w as _, h as _) {
             log::error!(
-                "Failed to reset resolution of display '{}' to ({},{}): {}",
+                "Failed to restore resolution of display '{}' to ({},{}): {}",
                 name,
                 w,
                 h,
@@ -146,7 +147,7 @@ pub fn reset_resolutions() {
             );
         }
     }
-    // Can be cleared because reset resolutions is called when there is no client connected.
+    // Can be cleared because restore resolutions is called when there is no client connected.
     CHANGED_RESOLUTIONS.write().unwrap().clear();
 }
 
@@ -344,14 +345,18 @@ pub fn is_inited_msg() -> Option<Message> {
     None
 }
 
-pub async fn update_get_sync_displays() -> ResultType<Vec<DisplayInfo>> {
+pub async fn update_get_sync_displays_on_login() -> ResultType<Vec<DisplayInfo>> {
     #[cfg(target_os = "linux")]
     {
         if !is_x11() {
             return super::wayland::get_displays().await;
         }
     }
-    check_update_displays(&try_get_displays()?);
+    #[cfg(not(windows))]
+    let displays = display_service::try_get_displays();
+    #[cfg(windows)]
+    let displays = display_service::try_get_displays_add_amyuni_headless();
+    check_update_displays(&displays?);
     Ok(SYNC_DISPLAYS.lock().unwrap().displays.clone())
 }
 
